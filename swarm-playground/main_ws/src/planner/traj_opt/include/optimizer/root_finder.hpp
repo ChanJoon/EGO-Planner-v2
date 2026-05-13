@@ -649,11 +649,19 @@ inline std::set<double> isolateRealRoots(const Eigen::VectorXd &coeffs, double l
 //              coeffs(lbound) != 0, coeffs(rbound) != 0, lbound < rbound
 {
     std::set<double> rts;
+    if (coeffs.size() <= 1 || fabs(coeffs(0)) < DBL_EPSILON || !coeffs.allFinite() || !(lbound < ubound))
+    {
+        return rts;
+    }
 
     // Calculate monic coefficients
     int order = (int)coeffs.size() - 1;
     Eigen::VectorXd monicCoeffs(order + 1);
     monicCoeffs << 1.0, coeffs.tail(order) / coeffs(0);
+    if (!monicCoeffs.allFinite())
+    {
+        return RootFinderPriv::eigenSolveRealRoots(coeffs, lbound, ubound, tol);
+    }
 
     // Calculate Cauchy’s bound for the roots of a polynomial
     double rho_c = 1 + monicCoeffs.tail(order).cwiseAbs().maxCoeff();
@@ -672,7 +680,15 @@ inline std::set<double> isolateRealRoots(const Eigen::VectorXd &coeffs, double l
         }
     }
     nonzeroCoeffs = nonzeroCoeffs.head(nonzeros).eval();
+    if (nonzeros <= 1)
+    {
+        return rts;
+    }
     Eigen::VectorXd kojimaVec = nonzeroCoeffs.tail(nonzeros - 1).cwiseQuotient(nonzeroCoeffs.head(nonzeros - 1)).cwiseAbs();
+    if (kojimaVec.size() == 0 || !kojimaVec.allFinite())
+    {
+        return RootFinderPriv::eigenSolveRealRoots(coeffs, lbound, ubound, tol);
+    }
     kojimaVec.tail(1) /= 2.0;
     double rho_k = 2.0 * kojimaVec.maxCoeff();
 
