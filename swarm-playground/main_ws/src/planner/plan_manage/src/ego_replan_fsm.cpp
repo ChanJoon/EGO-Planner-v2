@@ -9,6 +9,7 @@ namespace ego_planner
     exec_state_ = FSM_EXEC_STATE::INIT;
     have_target_ = false;
     have_odom_ = false;
+    have_pending_goal_ = false;
     have_recv_pre_agent_ = false;
     flag_escape_emergency_ = true;
     mandatory_stop_ = false;
@@ -108,6 +109,16 @@ namespace ego_planner
 
     case WAIT_TARGET:
     {
+      if (have_pending_goal_)
+      {
+        const Eigen::Vector3d pending_goal = pending_goal_;
+        have_pending_goal_ = false;
+        ROS_INFO_STREAM("[EGO-ReplanFSM] Processing goal deferred until odometry/FSM readiness: "
+                        << pending_goal.transpose());
+        if (planNextWaypoint(pending_goal))
+          have_trigger_ = true;
+      }
+
       if (!have_target_ || !have_trigger_)
         goto force_return; // return;
       else
@@ -519,9 +530,24 @@ namespace ego_planner
 
       /*** display ***/
       constexpr double step_size_t = 0.1;
-      int i_end = floor(planner_manager_->traj_.global_traj.duration / step_size_t);
+      const double duration = planner_manager_->traj_.global_traj.duration;
+      const double sample_count = floor(duration / step_size_t);
+      if (!std::isfinite(duration) || duration <= 0.0 ||
+          !std::isfinite(sample_count) || sample_count < 1.0 || sample_count > 100000.0)
+      {
+        ROS_ERROR_STREAM("[EGO-ReplanFSM] Refusing invalid global trajectory sampling:"
+                         << " duration=" << duration
+                         << " sample_count=" << sample_count
+                         << " have_odom=" << have_odom_
+                         << " exec_state=" << static_cast<int>(exec_state_)
+                         << " odom=" << odom_pos_.transpose()
+                         << " goal=" << next_wp.transpose());
+        return false;
+      }
+
+      const size_t i_end = static_cast<size_t>(sample_count);
       vector<Eigen::Vector3d> gloabl_traj(i_end);
-      for (int i = 0; i < i_end; i++)
+      for (size_t i = 0; i < i_end; i++)
       {
         gloabl_traj[i] = planner_manager_->traj_.global_traj.traj.getPos(i * step_size_t);
       }
@@ -588,6 +614,17 @@ namespace ego_planner
     ROS_INFO("Received goal: %f, %f, %f", msg->goal[0], msg->goal[1], msg->goal[2]);
 
     Eigen::Vector3d end_wp(msg->goal[0], msg->goal[1], msg->goal[2]);
+    if (!have_odom_ || exec_state_ == FSM_EXEC_STATE::INIT)
+    {
+      pending_goal_ = end_wp;
+      have_pending_goal_ = true;
+      ROS_WARN_STREAM("[EGO-ReplanFSM] Deferring goal until odometry/FSM readiness:"
+                      << " have_odom=" << have_odom_
+                      << " exec_state=" << static_cast<int>(exec_state_)
+                      << " goal=" << end_wp.transpose());
+      return;
+    }
+
     if (planNextWaypoint(end_wp))
     {
       have_trigger_ = true;

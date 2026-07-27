@@ -74,11 +74,13 @@ namespace ego_planner
     bool flag_escape_emergency_;
 
     bool have_trigger_, have_target_, have_odom_, have_new_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_;
+    bool have_pending_goal_;
     FSM_EXEC_STATE exec_state_;
     int continously_called_times_{0};
 
     Eigen::Vector3d start_pt_, start_vel_, start_acc_;   // start state
-    Eigen::Vector3d final_goal_;                             // goal state
+    Eigen::Vector3d final_goal_;                         // goal state
+    Eigen::Vector3d pending_goal_;                       // goal received before odometry/FSM readiness
     Eigen::Vector3d local_target_pt_, local_target_vel_; // local target state
     Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_;     // odometry state
     std::vector<Eigen::Vector3d> wps_;
