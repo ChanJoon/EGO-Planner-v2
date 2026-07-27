@@ -1,5 +1,9 @@
 #include "plan_env/grid_map.h"
 
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+
 void GridMap::initMap(ros::NodeHandle &nh)
 {
   node_ = nh;
@@ -41,7 +45,31 @@ void GridMap::initMap(ros::NodeHandle &nh)
 
   node_.param("grid_map/show_occ_time", mp_.show_occ_time_, false);
 
-  mp_.inf_grid_ = ceil((mp_.obstacles_inflation_ - 1e-5) / mp_.resolution_);
+  constexpr const char *kGridInitDebugTag = "[DEBUG-ego-grid-init-7f3a]";
+  const auto fail_invalid_grid_config = [&](const std::string &detail) {
+    ROS_FATAL_STREAM(kGridInitDebugTag << " invalid grid configuration: " << detail);
+    throw std::invalid_argument(detail);
+  };
+
+  ROS_WARN_STREAM(kGridInitDebugTag
+                  << " raw resolution=" << mp_.resolution_
+                  << " local_update_range=" << mp_.local_update_range3d_.transpose()
+                  << " obstacles_inflation=" << mp_.obstacles_inflation_);
+
+  if (!std::isfinite(mp_.resolution_) || mp_.resolution_ <= 0.0)
+    fail_invalid_grid_config("grid_map/resolution must be finite and > 0");
+  if (!mp_.local_update_range3d_.array().isFinite().all() ||
+      (mp_.local_update_range3d_.array() <= 0.0).any())
+    fail_invalid_grid_config("grid_map/local_update_range_{x,y,z} must be finite and > 0");
+  if (!std::isfinite(mp_.obstacles_inflation_) || mp_.obstacles_inflation_ < 0.0)
+    fail_invalid_grid_config("grid_map/obstacles_inflation must be finite and >= 0");
+
+  const double inf_grid_double = ceil((mp_.obstacles_inflation_ - 1e-5) / mp_.resolution_);
+  if (!std::isfinite(inf_grid_double) ||
+      inf_grid_double < 0.0 ||
+      inf_grid_double > static_cast<double>(std::numeric_limits<int>::max()))
+    fail_invalid_grid_config("derived inflation grid is outside the supported int range");
+  mp_.inf_grid_ = static_cast<int>(inf_grid_double);
   if (mp_.inf_grid_ > 4)
   {
     mp_.inf_grid_ = 4;
@@ -50,7 +78,15 @@ void GridMap::initMap(ros::NodeHandle &nh)
   }
 
   mp_.resolution_inv_ = 1 / mp_.resolution_;
-  mp_.local_update_range3i_ = (mp_.local_update_range3d_ * mp_.resolution_inv_).array().ceil().cast<int>();
+  const Eigen::Array3d local_update_range_voxels =
+      (mp_.local_update_range3d_ * mp_.resolution_inv_).array().ceil();
+  const double max_half_int =
+      static_cast<double>(std::numeric_limits<int>::max()) / 2.0;
+  if (!local_update_range_voxels.isFinite().all() ||
+      (local_update_range_voxels <= 0.0).any() ||
+      (local_update_range_voxels > max_half_int).any())
+    fail_invalid_grid_config("derived local update range is outside the supported int range");
+  mp_.local_update_range3i_ = local_update_range_voxels.cast<int>();
   mp_.local_update_range3d_ = mp_.local_update_range3i_.array().cast<double>() * mp_.resolution_;
   md_.ringbuffer_size3i_ = 2 * mp_.local_update_range3i_;
   md_.ringbuffer_inf_size3i_ = md_.ringbuffer_size3i_ + Eigen::Vector3i(2 * mp_.inf_grid_, 2 * mp_.inf_grid_, 2 * mp_.inf_grid_);
@@ -69,8 +105,43 @@ void GridMap::initMap(ros::NodeHandle &nh)
 
   // initialize data buffers
   Eigen::Vector3i map_voxel_num3i = 2 * mp_.local_update_range3i_;
-  int buffer_size = map_voxel_num3i(0) * map_voxel_num3i(1) * map_voxel_num3i(2);
-  int buffer_inf_size = (map_voxel_num3i(0) + 2 * mp_.inf_grid_) * (map_voxel_num3i(1) + 2 * mp_.inf_grid_) * (map_voxel_num3i(2) + 2 * mp_.inf_grid_);
+  Eigen::Vector3i map_inf_voxel_num3i =
+      map_voxel_num3i + Eigen::Vector3i::Constant(2 * mp_.inf_grid_);
+  const auto checked_voxel_count = [&](const Eigen::Vector3i &dimensions,
+                                       const char *label) -> size_t {
+    size_t count = 1;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+      if (dimensions(axis) <= 0)
+        fail_invalid_grid_config(std::string(label) + " contains a non-positive dimension");
+      const size_t dimension = static_cast<size_t>(dimensions(axis));
+      if (count > std::numeric_limits<size_t>::max() / dimension)
+        fail_invalid_grid_config(std::string(label) + " voxel count overflows size_t");
+      count *= dimension;
+    }
+    return count;
+  };
+  const size_t buffer_size = checked_voxel_count(map_voxel_num3i, "map");
+  const size_t buffer_inf_size = checked_voxel_count(map_inf_voxel_num3i, "inflated map");
+  if (buffer_size > md_.occupancy_buffer_.max_size() ||
+      buffer_size > md_.count_hit_and_miss_.max_size() ||
+      buffer_size > md_.count_hit_.max_size() ||
+      buffer_size > md_.flag_rayend_.max_size() ||
+      buffer_size > md_.flag_traverse_.max_size() ||
+      buffer_size > md_.cache_voxel_.max_size())
+    fail_invalid_grid_config("map voxel count exceeds a destination vector max_size");
+  if (buffer_inf_size > md_.occupancy_buffer_inflate_.max_size())
+    fail_invalid_grid_config("inflated map voxel count exceeds destination vector max_size");
+
+  ROS_WARN_STREAM(kGridInitDebugTag
+                  << " derived resolution=" << mp_.resolution_
+                  << " local_update_range=" << mp_.local_update_range3d_.transpose()
+                  << " local_update_range_voxels=" << mp_.local_update_range3i_.transpose()
+                  << " inflation_grid=" << mp_.inf_grid_
+                  << " map_dimensions=" << map_voxel_num3i.transpose()
+                  << " map_voxels=" << buffer_size
+                  << " inflated_dimensions=" << map_inf_voxel_num3i.transpose()
+                  << " inflated_voxels=" << buffer_inf_size);
   md_.ringbuffer_origin3i_ = Eigen::Vector3i(0, 0, 0);
   md_.ringbuffer_inf_origin3i_ = Eigen::Vector3i(0, 0, 0);
 
