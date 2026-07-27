@@ -14,6 +14,7 @@ namespace ego_planner
 
   void EGOPlannerManager::initPlanModules(ros::NodeHandle &nh, PlanningVisualization::Ptr vis)
   {
+    constexpr const char *kPlannerInitDebugTag = "[DEBUG-ego-init-phase-b6d1]";
     /* read algorithm parameters */
 
     nh.param("manager/max_vel", pp_.max_vel_, -1.0);
@@ -24,17 +25,28 @@ namespace ego_planner
     nh.param("manager/use_multitopology_trajs", pp_.use_multitopology_trajs, false);
     nh.param("manager/drone_id", pp_.drone_id, -1);
 
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=grid_map_construct_begin");
     grid_map_.reset(new GridMap);
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=grid_map_construct_done");
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=grid_map_init_begin");
     grid_map_->initMap(nh);
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=grid_map_init_done");
 
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=optimizer_construct_begin");
     ploy_traj_opt_.reset(new PolyTrajOptimizer);
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=optimizer_construct_done");
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=optimizer_set_param_begin");
     ploy_traj_opt_->setParam(nh);
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=optimizer_set_param_done");
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=optimizer_set_environment_begin");
     ploy_traj_opt_->setEnvironment(grid_map_);
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=optimizer_set_environment_done");
 
     visualization_ = vis;
 
     ploy_traj_opt_->setSwarmTrajs(&traj_.swarm_traj);
     ploy_traj_opt_->setDroneId(pp_.drone_id);
+    ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=planner_modules_init_complete");
   }
 
   bool EGOPlannerManager::reboundReplan(

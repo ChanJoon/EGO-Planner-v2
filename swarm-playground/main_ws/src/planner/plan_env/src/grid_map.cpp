@@ -145,14 +145,77 @@ void GridMap::initMap(ros::NodeHandle &nh)
   md_.ringbuffer_origin3i_ = Eigen::Vector3i(0, 0, 0);
   md_.ringbuffer_inf_origin3i_ = Eigen::Vector3i(0, 0, 0);
 
-  md_.occupancy_buffer_ = vector<double>(buffer_size, mp_.clamp_min_log_);
-  md_.occupancy_buffer_inflate_ = vector<uint16_t>(buffer_inf_size, 0);
+  const char *allocation_phase = "not_started";
+  size_t allocation_count = 0;
+  try
+  {
+    allocation_phase = "occupancy_buffer";
+    allocation_count = buffer_size;
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_begin phase=" << allocation_phase
+                                     << " count=" << allocation_count
+                                     << " element_bytes=" << sizeof(double)
+                                     << " max_size=" << md_.occupancy_buffer_.max_size());
+    md_.occupancy_buffer_ = vector<double>(buffer_size, mp_.clamp_min_log_);
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_done phase=" << allocation_phase);
 
-  md_.count_hit_and_miss_ = vector<short>(buffer_size, 0);
-  md_.count_hit_ = vector<short>(buffer_size, 0);
-  md_.flag_rayend_ = vector<char>(buffer_size, -1);
-  md_.flag_traverse_ = vector<char>(buffer_size, -1);
-  md_.cache_voxel_ = vector<Eigen::Vector3i>(buffer_size, Eigen::Vector3i(0, 0, 0));
+    allocation_phase = "occupancy_buffer_inflate";
+    allocation_count = buffer_inf_size;
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_begin phase=" << allocation_phase
+                                     << " count=" << allocation_count
+                                     << " element_bytes=" << sizeof(uint16_t)
+                                     << " max_size=" << md_.occupancy_buffer_inflate_.max_size());
+    md_.occupancy_buffer_inflate_ = vector<uint16_t>(buffer_inf_size, 0);
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_done phase=" << allocation_phase);
+
+    allocation_phase = "count_hit_and_miss";
+    allocation_count = buffer_size;
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_begin phase=" << allocation_phase
+                                     << " count=" << allocation_count
+                                     << " element_bytes=" << sizeof(short)
+                                     << " max_size=" << md_.count_hit_and_miss_.max_size());
+    md_.count_hit_and_miss_ = vector<short>(buffer_size, 0);
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_done phase=" << allocation_phase);
+
+    allocation_phase = "count_hit";
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_begin phase=" << allocation_phase
+                                     << " count=" << allocation_count
+                                     << " element_bytes=" << sizeof(short)
+                                     << " max_size=" << md_.count_hit_.max_size());
+    md_.count_hit_ = vector<short>(buffer_size, 0);
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_done phase=" << allocation_phase);
+
+    allocation_phase = "flag_rayend";
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_begin phase=" << allocation_phase
+                                     << " count=" << allocation_count
+                                     << " element_bytes=" << sizeof(char)
+                                     << " max_size=" << md_.flag_rayend_.max_size());
+    md_.flag_rayend_ = vector<char>(buffer_size, -1);
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_done phase=" << allocation_phase);
+
+    allocation_phase = "flag_traverse";
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_begin phase=" << allocation_phase
+                                     << " count=" << allocation_count
+                                     << " element_bytes=" << sizeof(char)
+                                     << " max_size=" << md_.flag_traverse_.max_size());
+    md_.flag_traverse_ = vector<char>(buffer_size, -1);
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_done phase=" << allocation_phase);
+
+    allocation_phase = "cache_voxel";
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_begin phase=" << allocation_phase
+                                     << " count=" << allocation_count
+                                     << " element_bytes=" << sizeof(Eigen::Vector3i)
+                                     << " max_size=" << md_.cache_voxel_.max_size());
+    md_.cache_voxel_ = vector<Eigen::Vector3i>(buffer_size, Eigen::Vector3i(0, 0, 0));
+    ROS_WARN_STREAM(kGridInitDebugTag << " allocation_done phase=" << allocation_phase);
+  }
+  catch (const std::exception &error)
+  {
+    ROS_FATAL_STREAM(kGridInitDebugTag << " allocation_failed phase=" << allocation_phase
+                                      << " count=" << allocation_count
+                                      << " error=" << error.what());
+    throw;
+  }
+  ROS_WARN_STREAM(kGridInitDebugTag << " phase=vector_allocations_complete");
 
   md_.raycast_num_ = 0;
   md_.proj_points_cnt_ = 0;
