@@ -2,6 +2,7 @@
 #include <plan_manage/planner_manager.h>
 #include <thread>
 #include "visualization_msgs/Marker.h" // zx-todo
+#include <std_msgs/Float32.h>
 
 namespace ego_planner
 {
@@ -24,6 +25,15 @@ namespace ego_planner
     nh.param("manager/planning_horizon", pp_.planning_horizen_, 5.0);
     nh.param("manager/use_multitopology_trajs", pp_.use_multitopology_trajs, false);
     nh.param("manager/drone_id", pp_.drone_id, -1);
+    // Default-off: an un-flagged run is byte-identical to upstream.
+    nh.param("manager/publish_timing", publish_timing_, false);
+    if (publish_timing_)
+    {
+      // Leading slash on purpose: `nh` here is the node-private handle, so a relative
+      // name would advertise /<node>/planning_time and the relay's absolute subscription
+      // would never bind -- silently, with rows that still look complete.
+      planning_time_pub_ = nh.advertise<std_msgs::Float32>("/planning_time", 5);
+    }
 
     ROS_WARN_STREAM(kPlannerInitDebugTag << " phase=grid_map_construct_begin");
     grid_map_.reset(new GridMap);
@@ -55,8 +65,8 @@ namespace ego_planner
       const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
       const bool flag_randomPolyTraj, const bool touch_goal)
   {
-    ros::Time t_start = ros::Time::now();
-    ros::Duration t_init, t_opt;
+    ros::WallTime t_start = ros::WallTime::now();
+    ros::WallDuration t_init, t_opt;
 
     static int count = 0;
     cout << "\033[47;30m\n[" << t_start << "] Drone " << pp_.drone_id << " Replan " << count++ << "\033[0m" << endl;
@@ -84,14 +94,14 @@ namespace ego_planner
       return false;
     }
 
-    t_init = ros::Time::now() - t_start;
+    t_init = ros::WallTime::now() - t_start;
 
     std::vector<Eigen::Vector3d> point_set;
     for (int i = 0; i < cstr_pts.cols(); ++i)
       point_set.push_back(cstr_pts.col(i));
     visualization_->displayInitPathList(point_set, 0.2, 0);
 
-    t_start = ros::Time::now();
+    t_start = ros::WallTime::now();
 
     /*** STEP 2: OPTIMIZE ***/
     bool flag_success = false;
@@ -140,7 +150,7 @@ namespace ego_planner
         }
       }
 
-      t_opt = ros::Time::now() - t_start;
+      t_opt = ros::WallTime::now() - t_start;
 
       if (trajs.size() > 1)
       {
@@ -165,7 +175,7 @@ namespace ego_planner
                                                         innerPts, initTraj.getDurations(), final_cost);
       best_MJO = ploy_traj_opt_->getMinJerkOpt();
 
-      t_opt = ros::Time::now() - t_start;
+      t_opt = ros::WallTime::now() - t_start;
     }
 
     /*** STEP 3: Store and display results ***/
@@ -178,6 +188,12 @@ namespace ego_planner
       count_success++;
       printf("Time:\033[42m%.3fms,\033[0m init:%.3fms, optimize:%.3fms, avg=%.3fms\n",
              (t_init + t_opt).toSec() * 1000, t_init.toSec() * 1000, t_opt.toSec() * 1000, sum_time / count_success * 1000);
+      if (publish_timing_)
+      {
+        std_msgs::Float32 time_msg;
+        time_msg.data = static_cast<float>((t_init + t_opt).toSec() * 1000.0);
+        planning_time_pub_.publish(time_msg);
+      }
       // cout << "total time:\033[42m" << (t_init + t_opt).toSec()
       //      << "\033[0m,init:" << t_init.toSec()
       //      << ",optimize:" << t_opt.toSec()

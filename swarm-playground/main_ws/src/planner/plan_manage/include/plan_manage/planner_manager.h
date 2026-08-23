@@ -28,6 +28,13 @@ namespace ego_planner
 
     /* main planning interface */
     void initPlanModules(ros::NodeHandle &nh, PlanningVisualization::Ptr vis = NULL);
+
+    // Benchmark instrumentation, default-off. `manager/publish_timing` turns on a
+    // std_msgs::Float32 on the global /planning_time carrying (t_init + t_opt) in ms for
+    // each successful replan -- the same quantity EGO-Planner v1 publishes on the same
+    // topic, so the two versions' replan cost is measured like for like.
+    ros::Publisher planning_time_pub_;
+    bool publish_timing_{false};
     bool computeInitState(
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,

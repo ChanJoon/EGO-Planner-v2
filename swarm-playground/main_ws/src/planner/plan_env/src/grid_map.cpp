@@ -1,4 +1,5 @@
 #include "plan_env/grid_map.h"
+#include <std_msgs/Float32.h>
 
 #include <cmath>
 #include <limits>
@@ -44,6 +45,14 @@ void GridMap::initMap(ros::NodeHandle &nh)
   node_.param("grid_map/min_ray_length", mp_.min_ray_length_, 0.1);
 
   node_.param("grid_map/show_occ_time", mp_.show_occ_time_, false);
+  // Default-off: an un-flagged run is byte-identical to upstream.
+  node_.param("grid_map/publish_timing", publish_timing_, false);
+  if (publish_timing_)
+  {
+    // Leading slash: `node_` is the private handle, and a relative name would advertise
+    // /<node>/mapping_time, which the relay's absolute subscription never binds to.
+    mapping_time_pub_ = node_.advertise<std_msgs::Float32>("/mapping_time", 10);
+  }
 
   constexpr const char *kGridInitDebugTag = "[DEBUG-ego-grid-init-7f3a]";
   const auto fail_invalid_grid_config = [&](const std::string &detail) {
@@ -278,22 +287,32 @@ void GridMap::updateOccupancyCallback(const ros::TimerEvent & /*event*/)
     return;
 
   /* update occupancy */
-  ros::Time t1, t2, t3, t4, t5;
-  t1 = ros::Time::now();
+  ros::WallTime t1, t2, t3, t4, t5;
+  t1 = ros::WallTime::now();
 
   moveRingBuffer();
-  t2 = ros::Time::now();
+  t2 = ros::WallTime::now();
 
   projectDepthImage();
-  t3 = ros::Time::now();
+  t3 = ros::WallTime::now();
 
   if (md_.proj_points_cnt_ > 0)
   {
     raycastProcess();
-    t4 = ros::Time::now();
+    t4 = ros::WallTime::now();
 
     clearAndInflateLocalMap();
-    t5 = ros::Time::now();
+    t5 = ros::WallTime::now();
+
+    if (publish_timing_)
+    {
+      // t2..t5, excluding moveRingBuffer: v1 has no ring buffer, and its /mapping_time is
+      // projectDepthImage + raycastProcess + clearAndInflateLocalMap. Reporting the same
+      // three keeps the two columns comparable.
+      std_msgs::Float32 time_msg;
+      time_msg.data = static_cast<float>((t5 - t2).toSec() * 1000.0);
+      mapping_time_pub_.publish(time_msg);
+    }
 
     if (mp_.show_occ_time_)
     {
@@ -324,10 +343,10 @@ void GridMap::visCallback(const ros::TimerEvent & /*event*/)
   if (!mp_.have_initialized_)
     return;
 
-  ros::Time t0 = ros::Time::now();
+  ros::WallTime t0 = ros::WallTime::now();
   publishMapInflate();
   publishMap();
-  ros::Time t1 = ros::Time::now();
+  ros::WallTime t1 = ros::WallTime::now();
 
   if (mp_.show_occ_time_)
   {
@@ -340,7 +359,7 @@ void GridMap::fadingCallback(const ros::TimerEvent & /*event*/)
   const double reduce = (mp_.clamp_max_log_ - mp_.min_occupancy_log_) / (mp_.fading_time_ * 2); // function called at 2Hz
   const double low_thres = mp_.clamp_min_log_ + reduce;
 
-  ros::Time t0 = ros::Time::now();
+  ros::WallTime t0 = ros::WallTime::now();
   for (size_t i = 0; i < md_.occupancy_buffer_.size(); ++i)
   {
     if (md_.occupancy_buffer_[i] > low_thres)
@@ -355,7 +374,7 @@ void GridMap::fadingCallback(const ros::TimerEvent & /*event*/)
       }
     }
   }
-  ros::Time t1 = ros::Time::now();
+  ros::WallTime t1 = ros::WallTime::now();
 
   if (mp_.show_occ_time_)
   {
@@ -473,6 +492,9 @@ void GridMap::odomCallback(const nav_msgs::OdometryConstPtr &odom)
 void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
 {
   /* Note: no obstalce elimination in this function! */
+  ros::WallTime t0, t1, t2;
+  if (mp_.show_occ_time_)
+    t0 = ros::WallTime::now();
 
   if (!md_.has_odom_)
   {
@@ -490,6 +512,8 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
     return;
 
   moveRingBuffer();
+  if (mp_.show_occ_time_)
+    t1 = ros::WallTime::now();
 
   pcl::PointXYZ pt;
   Eigen::Vector3d p3d, p3d_inf;
@@ -513,6 +537,13 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
         changeInfBuf(true, inf_buf_id, idx);
       }
     }
+  }
+
+  if (mp_.show_occ_time_)
+  {
+    t2 = ros::WallTime::now();
+    printf("CloudMap(ms): move_ring = %lf, cloud_occ_inflate = %lf, points = %zu\n",
+           (t1 - t0).toSec() * 1000, (t2 - t1).toSec() * 1000, latest_cloud.points.size());
   }
 }
 
@@ -712,7 +743,7 @@ void GridMap::raycastProcess()
 {
   md_.cache_voxel_cnt_ = 0;
 
-  ros::Time t1, t2, t3;
+  ros::WallTime t1, t2, t3;
 
   md_.raycast_num_ += 1;
 
@@ -720,7 +751,7 @@ void GridMap::raycastProcess()
   Eigen::Vector3d ray_pt, pt_w;
 
   int pts_num = 0;
-  t1 = ros::Time::now();
+  t1 = ros::WallTime::now();
   for (int i = 0; i < md_.proj_points_cnt_; ++i)
   {
     int vox_idx;
@@ -777,7 +808,7 @@ void GridMap::raycastProcess()
     }
   }
 
-  t2 = ros::Time::now();
+  t2 = ros::WallTime::now();
 
   for (int i = 0; i < md_.cache_voxel_cnt_; ++i)
   {
@@ -803,7 +834,7 @@ void GridMap::raycastProcess()
                  mp_.clamp_max_log_);
   }
 
-  t3 = ros::Time::now();
+  t3 = ros::WallTime::now();
 
   if (mp_.show_occ_time_)
   {

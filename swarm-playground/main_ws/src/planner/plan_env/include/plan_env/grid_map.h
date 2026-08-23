@@ -223,6 +223,11 @@ private:
   SynchronizerImageOdom sync_image_odom_;
 
   ros::Subscriber indep_cloud_sub_, indep_odom_sub_, extrinsic_sub_;
+  // Benchmark instrumentation, default-off (`grid_map/publish_timing`). Publishes the
+  // occupancy update cost in ms on the global /mapping_time, matching what EGO-Planner v1
+  // publishes on the same topic so the two versions compare like for like.
+  ros::Publisher mapping_time_pub_;
+  bool publish_timing_{false};
   ros::Publisher map_pub_, map_inf_pub_;
   ros::Timer occ_timer_, vis_timer_, fading_timer_;
 

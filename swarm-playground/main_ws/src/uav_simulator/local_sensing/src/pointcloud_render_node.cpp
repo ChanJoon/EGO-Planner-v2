@@ -30,6 +30,7 @@ ros::Timer local_sensing_timer;
 bool has_global_map(false);
 bool has_local_map(false);
 bool has_odom(false);
+bool show_sensing_time(false);
 
 nav_msgs::Odometry _odom;
 
@@ -116,9 +117,11 @@ void renderSensedPoints(const ros::TimerEvent& event) {
   _pointRadiusSquaredDistance.clear();
 
   pcl::PointXYZ pt;
+  ros::WallTime t0 = ros::WallTime::now();
   if (_kdtreeLocalMap.radiusSearch(searchPoint, sensing_horizon,
                                    _pointIdxRadiusSearch,
                                    _pointRadiusSquaredDistance) > 0) {
+    ros::WallTime t1 = ros::WallTime::now();
     for (size_t i = 0; i < _pointIdxRadiusSearch.size(); ++i) {
       pt = _cloud_all_map.points[_pointIdxRadiusSearch[i]];
 
@@ -137,18 +140,26 @@ void renderSensedPoints(const ros::TimerEvent& event) {
 
       _local_map.points.push_back(pt);
     }
+    ros::WallTime t2 = ros::WallTime::now();
+    _local_map.width = _local_map.points.size();
+    _local_map.height = 1;
+    _local_map.is_dense = true;
+
+    pcl::toROSMsg(_local_map, _local_map_pcd);
+    _local_map_pcd.header.frame_id = "map";
+
+    pub_cloud.publish(_local_map_pcd);
+    ros::WallTime t3 = ros::WallTime::now();
+    if (show_sensing_time) {
+      printf("NativeSensing(ms): radius_search = %lf, fov_filter = %lf, publish = %lf, points = %zu\n",
+             (t1 - t0).toSec() * 1000.0,
+             (t2 - t1).toSec() * 1000.0,
+             (t3 - t2).toSec() * 1000.0,
+             _local_map.points.size());
+    }
   } else {
     return;
   }
-
-  _local_map.width = _local_map.points.size();
-  _local_map.height = 1;
-  _local_map.is_dense = true;
-
-  pcl::toROSMsg(_local_map, _local_map_pcd);
-  _local_map_pcd.header.frame_id = "map";
-
-  pub_cloud.publish(_local_map_pcd);
 }
 
 void rcvLocalPointCloudCallBack(
@@ -163,6 +174,7 @@ int main(int argc, char** argv) {
   nh.getParam("sensing_horizon", sensing_horizon);
   nh.getParam("sensing_rate", sensing_rate);
   nh.getParam("estimation_rate", estimation_rate);
+  nh.param("show_sensing_time", show_sensing_time, false);
 
   nh.getParam("map/x_size", _x_size);
   nh.getParam("map/y_size", _y_size);
