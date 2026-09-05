@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+/swarm-playground/main_ws/build/
+/swarm-playground/main_ws/devel/
