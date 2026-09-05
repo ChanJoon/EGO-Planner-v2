@@ -1,0 +1,8 @@
+<launch>
+  <!-- Headless upstream EGO-Planner-v2 native ROS demo for latency sanity checks. -->
+  <include file="$(find ego_planner)/launch/single_drone_waypoints.launch" />
+
+  <!-- Override the upstream default so GridMap prints map update timing. -->
+  <param name="/drone_0_ego_planner_node/grid_map/show_occ_time" value="true" type="bool" />
+  <param name="/drone_0_pcl_render_node/show_sensing_time" value="true" type="bool" />
+</launch>
