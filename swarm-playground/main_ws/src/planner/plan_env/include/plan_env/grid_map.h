@@ -11,6 +11,7 @@
 #include <queue>
 #include <ros/ros.h>
 #include <tuple>
+#include <std_msgs/String.h>
 #include <visualization_msgs/Marker.h>
 
 #include <pcl/point_cloud.h>
@@ -146,6 +147,8 @@ public:
   inline int getInflateOccupancy(Eigen::Vector3d pos);
   inline double getResolution();
   bool getOdomDepthTimeout() { return md_.flag_depth_odom_timeout_; }
+  // Stamp of the last cloud folded into the map (end-to-end latency origin).
+  ros::Time lastCloudStamp() const { return last_cloud_stamp_; }
 
   typedef std::shared_ptr<GridMap> Ptr;
 
@@ -223,7 +226,9 @@ private:
   SynchronizerImageOdom sync_image_odom_;
 
   ros::Subscriber indep_cloud_sub_, indep_odom_sub_, extrinsic_sub_;
-  ros::Publisher map_pub_, map_inf_pub_;
+  ros::Publisher map_pub_, map_inf_pub_, latency_pub_;
+  bool publish_latency_ = false;
+  ros::Time last_cloud_stamp_;
   ros::Timer occ_timer_, vis_timer_, fading_timer_;
 
   //

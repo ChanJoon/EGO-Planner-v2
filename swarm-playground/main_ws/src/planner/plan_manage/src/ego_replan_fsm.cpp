@@ -57,6 +57,10 @@ namespace ego_planner
     data_disp_pub_ = nh.advertise<traj_utils::DataDisp>("planning/data_display", 100);
     heartbeat_pub_ = nh.advertise<std_msgs::Empty>("planning/heartbeat", 10);
     ground_height_pub_ = nh.advertise<std_msgs::Float64>("/ground_height_measurement", 10);
+    // LiDAR-E2E stage timing; off by default so released behavior is unchanged.
+    ros::param::param("/lidar_e2e/publish_latency", publish_latency_, false);
+    if (publish_latency_)
+      latency_pub_ = nh.advertise<std_msgs::String>("/lidar_e2e/latency", 100);
 
     if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
     {
@@ -406,12 +410,14 @@ namespace ego_planner
   bool EGOReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
   {
 
+    ros::Time cloud_stamp = planner_manager_->grid_map_->lastCloudStamp();
     planner_manager_->EmergencyStop(stop_pos);
 
     traj_utils::PolyTraj poly_msg;
     traj_utils::MINCOTraj MINCO_msg;
     polyTraj2ROSMsg(poly_msg, MINCO_msg);
     poly_traj_pub_.publish(poly_msg);
+    publishEndToEndLatency(cloud_stamp);
     broadcast_ploytraj_pub_.publish(MINCO_msg);
 
     return true;
@@ -420,6 +426,8 @@ namespace ego_planner
   bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
 
+    // The map state this replan consumes; a later cloud must not shorten end_to_end.
+    ros::Time cloud_stamp = planner_manager_->grid_map_->lastCloudStamp();
     planner_manager_->getLocalTarget(
         planning_horizen_, start_pt_, final_goal_,
         local_target_pt_, local_target_vel_,
@@ -440,6 +448,7 @@ namespace ego_planner
       traj_utils::MINCOTraj MINCO_msg;
       polyTraj2ROSMsg(poly_msg, MINCO_msg);
       poly_traj_pub_.publish(poly_msg);
+      publishEndToEndLatency(cloud_stamp);
       broadcast_ploytraj_pub_.publish(MINCO_msg);
     }
 
@@ -843,6 +852,18 @@ namespace ego_planner
     }
     for (int i = 0; i < piece_num; i++)
       MINCO_msg.duration[i] = durs[i];
+  }
+
+  // Stamp of the cloud the published trajectory consumed to its publish, on the shared wall clock.
+  void EGOReplanFSM::publishEndToEndLatency(const ros::Time &stamp)
+  {
+    if (!publish_latency_ || stamp.isZero())
+      return;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"stages_ms\":{\"end_to_end\":%.6f}}", (ros::Time::now() - stamp).toSec() * 1e3);
+    std_msgs::String msg;
+    msg.data = buf;
+    latency_pub_.publish(msg);
   }
 
   bool EGOReplanFSM::measureGroundHeight(double &height)
