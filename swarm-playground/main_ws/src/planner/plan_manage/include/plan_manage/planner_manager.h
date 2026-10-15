@@ -53,6 +53,15 @@ namespace ego_planner
     inline double getSwarmClearance(void) { return ploy_traj_opt_->get_swarm_clearance_(); }
     inline int getCpsNumPrePiece(void) { return ploy_traj_opt_->get_cps_num_prePiece_(); }
     // inline PtsChk_t getPtsCheck(void) { return ploy_traj_opt_->get_pts_check_(); }
+    // Outcome of the latest reboundReplan call; reason is "" on success, else
+    // init_state | constraint_check | optimize.
+    struct ReplanAttempt
+    {
+      double init_ms, opt_ms;
+      bool success;
+      const char *reason;
+    };
+    const ReplanAttempt &lastAttempt() const { return last_attempt_; }
 
     PlanParameters pp_;
     GridMap::Ptr grid_map_;
@@ -64,6 +73,7 @@ namespace ego_planner
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
 
     int continous_failures_count_{0};
+    ReplanAttempt last_attempt_{0.0, 0.0, false, ""};
 
   public:
     typedef unique_ptr<EGOPlannerManager> Ptr;

@@ -57,10 +57,7 @@ namespace ego_planner
     data_disp_pub_ = nh.advertise<traj_utils::DataDisp>("planning/data_display", 100);
     heartbeat_pub_ = nh.advertise<std_msgs::Empty>("planning/heartbeat", 10);
     ground_height_pub_ = nh.advertise<std_msgs::Float64>("/ground_height_measurement", 10);
-    // LiDAR-E2E stage timing; off by default so released behavior is unchanged.
-    ros::param::param("/lidar_e2e/publish_latency", publish_latency_, false);
-    if (publish_latency_)
-      latency_pub_ = nh.advertise<std_msgs::String>("/lidar_e2e/latency", 100);
+    latency_pub_.init(nh, "ego_replan_fsm");
 
     if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
     {
@@ -380,7 +377,10 @@ namespace ego_planner
         if (dangerous)
         {
           /* Handle the collided case immediately */
-          if (planFromLocalTraj()) // Make a chance
+          local_plan_trigger_ = "safety";
+          bool safety_plan_success = planFromLocalTraj(); // Make a chance
+          local_plan_trigger_ = "local";
+          if (safety_plan_success)
           {
             ROS_INFO("Plan success when detect collision. %f", t / info->duration);
             changeFSMExecState(EXEC_TRAJ, "SAFETY");
@@ -409,15 +409,13 @@ namespace ego_planner
 
   bool EGOReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
   {
-
-    ros::Time cloud_stamp = planner_manager_->grid_map_->lastCloudStamp();
+    ++pending_emergency_stops_;
     planner_manager_->EmergencyStop(stop_pos);
 
     traj_utils::PolyTraj poly_msg;
     traj_utils::MINCOTraj MINCO_msg;
     polyTraj2ROSMsg(poly_msg, MINCO_msg);
     poly_traj_pub_.publish(poly_msg);
-    publishEndToEndLatency(cloud_stamp);
     broadcast_ploytraj_pub_.publish(MINCO_msg);
 
     return true;
@@ -425,13 +423,12 @@ namespace ego_planner
 
   bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
-
-    // The map state this replan consumes; a later cloud must not shorten end_to_end.
-    ros::Time cloud_stamp = planner_manager_->grid_map_->lastCloudStamp();
+    auto t_target = lidar_e2e::Clock::now();
     planner_manager_->getLocalTarget(
         planning_horizen_, start_pt_, final_goal_,
         local_target_pt_, local_target_vel_,
         touch_goal_);
+    double target_ms = lidar_e2e::msBetween(t_target, lidar_e2e::Clock::now());
 
     bool plan_success = planner_manager_->reboundReplan(
         start_pt_, start_vel_, start_acc_,
@@ -441,6 +438,17 @@ namespace ego_planner
 
     have_new_target_ = false;
 
+    if (cycle_.open && latency_pub_.enabled())
+    {
+      const EGOPlannerManager::ReplanAttempt &a = planner_manager_->lastAttempt();
+      lidar_e2e::Json j;
+      j.num("target_ms", target_ms).num("init_ms", a.init_ms).num("opt_ms", a.opt_ms).boolean("success", a.success).str("reason", a.reason);
+      cycle_.attempts += (cycle_.attempts.empty() ? "{" : ",{") + j.body() + "}";
+      cycle_.compute_ms += target_ms + a.init_ms + a.opt_ms;
+      cycle_.success = a.success;
+      cycle_.reason = a.reason;
+    }
+
     if (plan_success)
     {
 
@@ -448,7 +456,12 @@ namespace ego_planner
       traj_utils::MINCOTraj MINCO_msg;
       polyTraj2ROSMsg(poly_msg, MINCO_msg);
       poly_traj_pub_.publish(poly_msg);
-      publishEndToEndLatency(cloud_stamp);
+      if (cycle_.open && latency_pub_.enabled() && cycle_.map_cloud_stamp_ns != 0)
+      {
+        cycle_.published = true;
+        cycle_.publish_minus_stamp_ms =
+            (double)((int64_t)ros::Time::now().toNSec() - (int64_t)cycle_.map_cloud_stamp_ns) * 1e-6;
+      }
       broadcast_ploytraj_pub_.publish(MINCO_msg);
     }
 
@@ -457,6 +470,12 @@ namespace ego_planner
 
   bool EGOReplanFSM::planFromGlobalTraj(const int trial_times /*=1*/) //zx-todo
   {
+    openPlanCycle("global");
+    auto cycle = lidar_e2e::onExit([&] {
+      if (!latency_pub_.enabled())
+        return;
+      closePlanCycle();
+    });
 
     start_pt_ = odom_pos_;
     start_vel_ = odom_vel_;
@@ -480,6 +499,12 @@ namespace ego_planner
 
   bool EGOReplanFSM::planFromLocalTraj(const int trial_times /*=1*/)
   {
+    openPlanCycle(local_plan_trigger_);
+    auto cycle = lidar_e2e::onExit([&] {
+      if (!latency_pub_.enabled())
+        return;
+      closePlanCycle();
+    });
 
     LocalTrajData *info = &planner_manager_->traj_.local_traj;
     double t_cur = ros::Time::now().toSec() - info->start_time;
@@ -854,16 +879,34 @@ namespace ego_planner
       MINCO_msg.duration[i] = durs[i];
   }
 
-  // Stamp of the cloud the published trajectory consumed to its publish, on the shared wall clock.
-  void EGOReplanFSM::publishEndToEndLatency(const ros::Time &stamp)
+  void EGOReplanFSM::openPlanCycle(const char *trigger)
   {
-    if (!publish_latency_ || stamp.isZero())
+    if (!latency_pub_.enabled())
       return;
-    char buf[64];
-    snprintf(buf, sizeof(buf), "{\"stages_ms\":{\"end_to_end\":%.6f}}", (ros::Time::now() - stamp).toSec() * 1e3);
-    std_msgs::String msg;
-    msg.data = buf;
-    latency_pub_.publish(msg);
+    cycle_ = PlanCycle{true, trigger, planner_manager_->grid_map_->lastCloudStampNs(),
+                       planner_manager_->grid_map_->mapUpdateCount(), "", 0.0, false, "no_attempt", false, 0.0};
+  }
+
+  // Publishes the open cycle; success is the last attempt's, since both plan functions
+  // return true exactly when their last callReboundReplan succeeded.
+  void EGOReplanFSM::closePlanCycle()
+  {
+    lidar_e2e::Json j;
+    j.integer("cycle", cycle_count_++)
+        .str("trigger", cycle_.trigger)
+        .u64("map_cloud_stamp_ns", cycle_.map_cloud_stamp_ns)
+        .integer("map_updates_during_plan",
+                 (long long)(planner_manager_->grid_map_->mapUpdateCount() - cycle_.map_updates_start))
+        .boolean("success", cycle_.success)
+        .str("reason", cycle_.reason)
+        .num("compute_ms", cycle_.compute_ms)
+        .integer("emergency_stops", pending_emergency_stops_)
+        .raw("attempts", "[" + cycle_.attempts + "]");
+    if (cycle_.success && cycle_.published)
+      j.num("publish_minus_stamp_ms", cycle_.publish_minus_stamp_ms);
+    pending_emergency_stops_ = 0;
+    cycle_.open = false;
+    latency_pub_.publish("plan_cycle", j);
   }
 
   bool EGOReplanFSM::measureGroundHeight(double &height)

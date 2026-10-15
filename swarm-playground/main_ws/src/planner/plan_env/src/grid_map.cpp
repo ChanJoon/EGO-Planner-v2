@@ -1,5 +1,4 @@
 #include "plan_env/grid_map.h"
-#include <chrono>
 
 void GridMap::initMap(ros::NodeHandle &nh)
 {
@@ -129,10 +128,7 @@ void GridMap::initMap(ros::NodeHandle &nh)
 
   map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("grid_map/occupancy", 10);
   map_inf_pub_ = node_.advertise<sensor_msgs::PointCloud2>("grid_map/occupancy_inflate", 10);
-  // LiDAR-E2E stage timing; off by default so released behavior is unchanged.
-  ros::param::param("/lidar_e2e/publish_latency", publish_latency_, false);
-  if (publish_latency_)
-    latency_pub_ = node_.advertise<std_msgs::String>("/lidar_e2e/latency", 100);
+  latency_pub_.init(node_, "grid_map");
 
   md_.occ_need_update_ = false;
   md_.has_first_depth_ = false;
@@ -345,6 +341,26 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
 {
   /* Note: no obstalce elimination in this function! */
 
+  // map_update record on every exit; applied only on the full path.
+  double conv_ms = 0.0, update_ms = 0.0;
+  bool converted = false, applied = false;
+  lidar_e2e::Clock::time_point t_map;
+  auto record = lidar_e2e::onExit([&] {
+    if (!latency_pub_.enabled())
+      return;
+    if (converted && !applied)
+      update_ms = lidar_e2e::msBetween(t_map, lidar_e2e::Clock::now());
+    lidar_e2e::Json j;
+    j.u64("cloud_stamp_ns", lidar_e2e::stampNs(img->header.stamp))
+        .integer("cloud_seq", img->header.seq)
+        .boolean("applied", applied)
+        .num("conv_ms", conv_ms)
+        .num("update_ms", update_ms)
+        .num("compute_ms", conv_ms + update_ms)
+        .integer("update_index", (long long)(applied ? map_update_count_ - 1 : map_update_count_));
+    latency_pub_.publish("map_update", j);
+  });
+
   if (!md_.has_odom_)
   {
     std::cout << "grid_map: no odom!" << std::endl;
@@ -352,9 +368,11 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
   }
 
   pcl::PointCloud<pcl::PointXYZ> latest_cloud;
-  auto t_pre = std::chrono::steady_clock::now();
+  auto t_pre = lidar_e2e::Clock::now();
   pcl::fromROSMsg(*img, latest_cloud);
-  auto t_map = std::chrono::steady_clock::now();
+  t_map = lidar_e2e::Clock::now();
+  conv_ms = lidar_e2e::msBetween(t_pre, t_map);
+  converted = true;
 
   if (latest_cloud.points.size() == 0)
     return;
@@ -388,18 +406,10 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
     }
   }
 
-  last_cloud_stamp_ = img->header.stamp;
-  if (publish_latency_)
-  {
-    auto t_end = std::chrono::steady_clock::now();
-    char buf[128];
-    snprintf(buf, sizeof(buf), "{\"stages_ms\":{\"preprocessing\":%.6f,\"mapping\":%.6f}}",
-             std::chrono::duration<double, std::milli>(t_map - t_pre).count(),
-             std::chrono::duration<double, std::milli>(t_end - t_map).count());
-    std_msgs::String msg;
-    msg.data = buf;
-    latency_pub_.publish(msg);
-  }
+  update_ms = lidar_e2e::msBetween(t_map, lidar_e2e::Clock::now());
+  last_cloud_stamp_ns_ = lidar_e2e::stampNs(img->header.stamp);
+  ++map_update_count_;
+  applied = true;
 }
 
 void GridMap::extrinsicCallback(const nav_msgs::OdometryConstPtr &odom)

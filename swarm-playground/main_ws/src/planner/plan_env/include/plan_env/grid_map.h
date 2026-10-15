@@ -11,7 +11,7 @@
 #include <queue>
 #include <ros/ros.h>
 #include <tuple>
-#include <std_msgs/String.h>
+#include <plan_env/lidar_e2e_latency.h>
 #include <visualization_msgs/Marker.h>
 
 #include <pcl/point_cloud.h>
@@ -147,8 +147,10 @@ public:
   inline int getInflateOccupancy(Eigen::Vector3d pos);
   inline double getResolution();
   bool getOdomDepthTimeout() { return md_.flag_depth_odom_timeout_; }
-  // Stamp of the last cloud folded into the map (end-to-end latency origin).
-  ros::Time lastCloudStamp() const { return last_cloud_stamp_; }
+  // Cloud stamp (ns) of the last applied map update, 0 before the first one.
+  uint64_t lastCloudStampNs() const { return last_cloud_stamp_ns_; }
+  // Number of applied map updates so far.
+  uint64_t mapUpdateCount() const { return map_update_count_; }
 
   typedef std::shared_ptr<GridMap> Ptr;
 
@@ -226,9 +228,10 @@ private:
   SynchronizerImageOdom sync_image_odom_;
 
   ros::Subscriber indep_cloud_sub_, indep_odom_sub_, extrinsic_sub_;
-  ros::Publisher map_pub_, map_inf_pub_, latency_pub_;
-  bool publish_latency_ = false;
-  ros::Time last_cloud_stamp_;
+  ros::Publisher map_pub_, map_inf_pub_;
+  lidar_e2e::Publisher latency_pub_;
+  uint64_t last_cloud_stamp_ns_ = 0;
+  uint64_t map_update_count_ = 0;
   ros::Timer occ_timer_, vis_timer_, fading_timer_;
 
   //

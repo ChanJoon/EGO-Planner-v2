@@ -14,6 +14,7 @@
 
 #include <optimizer/poly_traj_optimizer.h>
 #include <plan_env/grid_map.h>
+#include <plan_env/lidar_e2e_latency.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <quadrotor_msgs/GoalSet.h>
 #include <traj_utils/DataDisp.h>
@@ -87,8 +88,28 @@ namespace ego_planner
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
     ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_;
-    ros::Publisher poly_traj_pub_, data_disp_pub_, broadcast_ploytraj_pub_, heartbeat_pub_, ground_height_pub_, latency_pub_;
-    bool publish_latency_ = false;
+    ros::Publisher poly_traj_pub_, data_disp_pub_, broadcast_ploytraj_pub_, heartbeat_pub_, ground_height_pub_;
+
+    /* LiDAR-E2E plan_cycle record: one per planFromGlobalTraj/planFromLocalTraj call */
+    lidar_e2e::Publisher latency_pub_;
+    struct PlanCycle
+    {
+      bool open;
+      const char *trigger;
+      uint64_t map_cloud_stamp_ns, map_updates_start;
+      std::string attempts;
+      double compute_ms;
+      bool success;
+      const char *reason;
+      bool published;
+      double publish_minus_stamp_ms;
+    };
+    PlanCycle cycle_{false, "", 0, 0, "", 0.0, false, "", false, 0.0};
+    long long cycle_count_{0};
+    long long pending_emergency_stops_{0}; // callEmergencyStop calls since the last cycle record
+    const char *local_plan_trigger_{"local"}; // "safety" while checkCollisionCallback replans
+    void openPlanCycle(const char *trigger);
+    void closePlanCycle();
 
     /* state machine functions */
     void execFSMCallback(const ros::TimerEvent &e);
@@ -117,7 +138,6 @@ namespace ego_planner
     void triggerCallback(const geometry_msgs::PoseStampedPtr &msg);
     void RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg);
     void polyTraj2ROSMsg(traj_utils::PolyTraj &poly_msg, traj_utils::MINCOTraj &MINCO_msg);
-    void publishEndToEndLatency(const ros::Time &stamp);
 
     /* ground height measurement */
     bool measureGroundHeight(double &height);

@@ -62,6 +62,7 @@ namespace ego_planner
     if (!computeInitState(start_pt, start_vel, start_acc, local_target_pt, local_target_vel,
                           flag_polyInit, flag_randomPolyTraj, ts, initMJO))
     {
+      last_attempt_ = {(ros::Time::now() - t_start).toSec() * 1e3, 0.0, false, "init_state"};
       return false;
     }
 
@@ -69,6 +70,7 @@ namespace ego_planner
     vector<std::pair<int, int>> segments;
     if (ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments, initMJO, true) == PolyTrajOptimizer::CHK_RET::ERR)
     {
+      last_attempt_ = {(ros::Time::now() - t_start).toSec() * 1e3, 0.0, false, "constraint_check"};
       return false;
     }
 
@@ -185,6 +187,7 @@ namespace ego_planner
       continous_failures_count_++;
     }
 
+    last_attempt_ = {t_init.toSec() * 1e3, t_opt.toSec() * 1e3, flag_success, flag_success ? "" : "optimize"};
     return flag_success;
   }
 
